@@ -1,0 +1,312 @@
+import re
+
+
+# Spectral Type Parsing
+def parse_spectral_type(s):
+    match = re.match(r'([OBAFGKMWLTY])([0-9]?)([IVD]+)', s.upper())
+    if match:
+        spec_class = match.group(1)
+        subtype = int(match.group(2)) if match.group(2) else 0
+        lum_class = match.group(3)
+        return spec_class, subtype, lum_class
+    else:
+        return None, 0, "V"
+
+
+# Estimate main-sequence lifetime
+def main_sequence_lifetime(mass):
+    if mass <= 0:
+        return 0.1
+    return 10.0 * (1 / mass ** 2.5)
+
+
+def variability_penalty(var_type):
+    var_type_lower = var_type.lower()
+
+    # Starspot activity
+    if "by draconis" in var_type_lower or "by dra" in var_type_lower:
+        return "A"
+    elif "rs cvn" in var_type_lower or "rs canum" in var_type_lower:
+        return "B"
+
+    # Rotation-induced variations
+    elif "rotation" in var_type_lower or "starspot" in var_type_lower:
+        return "C"
+    elif "alpha2 cvn" in var_type_lower:
+        return "D"
+
+    # Mild pulsations
+    elif "delta scuti" in var_type_lower:
+        return "E"
+    elif "gamma dor" in var_type_lower or "gamma doradus" in var_type_lower:
+        return "F"
+    elif "spb" in var_type_lower or "slowly pulsating" in var_type_lower:
+        return "G"
+
+    # Pre-main sequence
+    elif "t tauri" in var_type_lower:
+        return "H"
+    elif "weak-line t tauri" in var_type_lower or "wtts" in var_type_lower:
+        return "I"
+
+    # Extreme cases
+    elif "flare" in var_type_lower or "uv cet" in var_type_lower:
+        return "J"
+    elif "cepheid" in var_type_lower:
+        return "K"
+    elif "mira" in var_type_lower:
+        return "L"
+
+    elif var_type.strip() == "":
+        return "N/A"
+    else:
+        return "N/A"
+
+
+# Binary system penalty
+def binary_penalty(binary_type):
+    binary_type_lower = binary_type.lower()
+
+    if "w" in binary_type_lower and "ursa" in binary_type_lower:
+        return "A"
+    elif "beta" in binary_type_lower and "lyrae" in binary_type_lower:
+        return "B"
+    elif "castor" in binary_type_lower:
+        return "C"
+    elif "sirius" in binary_type_lower:
+        return "D"
+    elif "alpha" in binary_type_lower or "centauri" in binary_type_lower:
+        return "E"
+    elif "tau" in binary_type_lower and "ceti" in binary_type_lower:
+        return "N/A"
+    else:
+        return "N/A"
+
+
+def spectral_to_number(spec_class, subtype):
+    if spec_class == "Y":
+        return 10 - subtype
+    elif spec_class == "T":
+        return 20 - subtype
+    elif spec_class == "L":
+        return 30 - subtype
+    elif spec_class == "M":
+        return 40 - subtype
+    elif spec_class == "K":
+        return 50 - subtype
+    elif spec_class == "G":
+        return 60 - subtype
+    elif spec_class == "F":
+        return 70 - subtype
+    elif spec_class == "A":
+        return 80 - subtype
+    elif spec_class == "B":
+        return 90 - subtype
+    elif spec_class == "O":
+        return 100 - subtype
+    elif spec_class == "W":
+        return 999
+    else:
+        return 47
+
+
+def predict_planet_types(var_type, binary_type, mass, metallicity, age, spectral_input):
+    S = {"h_metal": 0, "rock": 0, "l_metal": 0, "l_gas": 0, "h_gas": 0, "kuiper": 0, "no_planet": 0}
+
+    R = ["h_metal", "rock", "l_metal"]
+    G = ["l_gas", "h_gas"]
+
+    # Parse spectral type
+    spec_class, subtype, lum_class = parse_spectral_type(spectral_input)
+
+    S["h_metal"] += 60 * metallicity
+    S["rock"] += 30 * metallicity
+    S["l_metal"] += 10 * metallicity
+    S["l_gas"] += 60 * metallicity  # Much steeper
+    S["h_gas"] += 50 * metallicity  # Even steeper
+
+    if mass < 0.085:  
+        S["rock"] += 50
+        S["h_metal"] += 10
+        S["l_metal"] += 5
+        for planet_type in G:
+            S[planet_type] -= 40
+    elif 0.085 <= mass < 0.1:  
+        for planet_type in R:
+            S[planet_type] += 20
+        for planet_type in G:
+            S[planet_type] -= 30
+    elif 0.1 <= mass < 0.5:  
+        for planet_type in R:
+            S[planet_type] += 30
+        for planet_type in G:
+            S[planet_type] += 10
+    elif mass > 2.5:  
+        S["no_planet"] += 40
+    elif mass > 1.5:  
+        S["l_gas"] += 40
+        S["h_gas"] += 30
+        for planet_type in R:
+            S[planet_type] -= 10
+
+    spec_num = spectral_to_number(spec_class, subtype)
+
+    if spec_num > 60:
+        excess = spec_num - 50
+        S["no_planet"] += (1.5 ** (excess / 5)) * 20
+        for planet_type in R:
+            S[planet_type] -= excess * 0.5
+
+    if 30 < spec_num < 46:
+        S["kuiper"] += spec_num
+    elif 101 > spec_num > 45:
+        S["kuiper"] += 90 - spec_num
+    elif spec_num < 31:
+        S["kuiper"] += 46 - spec_num
+
+    if lum_class == "III":
+        for planet_type in R:
+            S[planet_type] -= 30
+        S["l_metal"] += 10
+        for planet_type in G:
+            S[planet_type] += 20
+        S["no_planet"] += 20
+    elif lum_class == "IV":
+        for planet_type in R:
+            S[planet_type] -= 10
+        S["l_metal"] += 10
+    elif lum_class == "D":
+        for planet_type in R:
+            S[planet_type] -= 40
+        S["l_metal"] += 10
+        for planet_type in G:
+            S[planet_type] -= 20
+        S["no_planet"] += 60
+    elif lum_class == "I":
+        for planet_type in R:
+            S[planet_type] -= 60
+        S["l_metal"] += 20
+        for planet_type in G:
+            S[planet_type] -= 40
+        S["no_planet"] += 60
+    elif lum_class == "II":
+        for planet_type in R:
+            S[planet_type] -= 60
+        S["l_metal"] += 20
+        for planet_type in G:
+            S[planet_type] -= 40
+        S["no_planet"] += 60
+    elif lum_class == "V":
+        for planet_type in R:
+            S[planet_type] += 20
+        for planet_type in G:
+            S[planet_type] += 30
+        S["no_planet"] -= 30
+        if age < 100:
+            S["kuiper"] += 20 * (1 - (age / 100) ** 5)
+            S["l_metal"] += -(-(10 * (1 - (age / 100) ** 5)) + 10)
+        else:
+            S["l_metal"] += 20
+    elif lum_class == "VI":
+        for planet_type in R:
+            S[planet_type] -= 40
+        for planet_type in G:
+            S[planet_type] -= 20
+        if age < 100:
+            S["kuiper"] += 40 * (1 - (age / 100) ** 5)
+            S["l_metal"] += -(-(30 * (1 - (age / 100) ** 5)) + 30)
+        else:
+            S["l_metal"] += 30
+
+    bin_type = binary_penalty(binary_type)
+
+    if bin_type == "A":
+        for key in S:
+            S[key] *= 0.2
+            S[key] -= 50
+    elif bin_type == "B":
+        for key in S:
+            S[key] *= 0.6
+            S[key] -= 20
+    elif bin_type == "C":
+        for key in S:
+            S[key] *= 0.3
+            S[key] -= 60
+    elif bin_type == "D":
+        for key in S:
+            S[key] *= 0.5
+            S[key] -= 20
+    elif bin_type == "E":
+        for key in S:
+            S[key] *= 0.8
+
+    var_penalty = variability_penalty(var_type)
+
+    if var_penalty == "A":
+        for key in S:
+            S[key] *= 0.85
+            S[key] -= 5
+    elif var_penalty == "B":
+        for key in S:
+            S[key] *= 0.8
+            S[key] -= 10
+    elif var_penalty == "C":
+        for key in S:
+            S[key] *= 0.9
+            S[key] -= 5
+    elif var_penalty == "D":
+        for key in S:
+            S[key] *= 0.7
+            S[key] -= 15
+    elif var_penalty == "F":
+        for key in S:
+            S[key] *= 0.8
+            S[key] -= 10
+    elif var_penalty == "G":
+        for key in S:
+            S[key] *= 0.85
+            S[key] -= 5
+    elif var_penalty == "H":
+        for key in S:
+            S[key] *= 0.8
+            S[key] -= 10
+
+    S["kuiper"] *= 0.3
+
+    # Safety floor
+    for key in S:
+        S[key] = max(S[key], 0)
+
+    # Debug output
+    print("\n[Debug] Raw Scores Before Normalization:")
+    for key, value in S.items():
+        print(f"{key:12}: {value:.2f}")
+
+    total = sum(S.values())
+    print(f"Total: {total:.2f}\n")
+
+    # Normalize to 100%
+    if total == 0:
+        return {"h_metal": 0, "rock": 0, "l_metal": 0, "l_gas": 0,
+                "h_gas": 0, "kuiper": 0, "no_planet": 100}
+
+    result = {}
+    for key in S:
+        result[key] = round(S[key] / total * 100, 1)
+
+    return result
+
+
+if __name__ == "__main__":
+    print("Planet Type Predictor")
+    var_type = input("Variability Type: ")
+    binary_type = input("Binary Type (e.g., Alpha Centauri-type, Procyon-type): ")
+    mass = float(input("Stellar Mass (in solar masses): "))
+    metallicity = float(input("Metallicity [Fe/H]: "))
+    age = float(input("Age (in Gyr): "))
+    spectral = input("Spectral Type (e.g., G2V, M5V, K5III): ")
+
+    result = predict_planet_types(var_type, binary_type, mass, metallicity, age, spectral)
+    print("\nPredicted Planet Probabilities:")
+    for k, v in result.items():
+        print(f"{k.capitalize():<12}: {v}%")
